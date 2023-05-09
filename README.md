@@ -1,5 +1,5 @@
 # Financial-Forecasting-through-Earnings-Call-Sentiment
-APAN 5205 Applied Analytics Frameworks and Methods II - Final Project
+APAN 5205 Applied Analytics Frameworks and Methods II - Final Project  
 Advised by: Prof. Vishal Lala
 
 The objective of our project is to develop a regression model with ARIMA errors that predicts the stock prices of the top 9 constituent NASDAQ stocks ("AAPL", "MSFT", "GOOG", "AMZN", "TSLA", "META", "NVDA", "PEP", "COST") by analyzing the earnings call transcripts of these companies. We selected these stocks based on the [article](https://www.nasdaq.com/articles/the-top-10-constituents-of-the-nasdaq-100-index) by NASDAQ.
