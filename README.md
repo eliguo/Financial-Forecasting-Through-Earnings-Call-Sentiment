@@ -1,6 +1,8 @@
 # Financial-Forecasting-through-Earnings-Call-Sentiment
+APAN 5205 Applied Analytics Frameworks and Methods II - Final Project
+Advised by: Prof. Vishal Lala
 
-The objective of our project is to develop a regression model with ARIMA errors that predicts the stock prices of the top 9 constituent NASDAQ stocks ("AAPL", "MSFT", "GOOG", "AMZN", "TSLA", "META", "NVDA", "PEP", "COST") by analyzing the earnings call transcripts of these companies. We selected these stocks based on the article by NASDAQ (https://www.nasdaq.com/articles/the-top-10-constituents-of-the-nasdaq-100-index).
+The objective of our project is to develop a regression model with ARIMA errors that predicts the stock prices of the top 9 constituent NASDAQ stocks ("AAPL", "MSFT", "GOOG", "AMZN", "TSLA", "META", "NVDA", "PEP", "COST") by analyzing the earnings call transcripts of these companies. We selected these stocks based on the [article] by NASDAQ (https://www.nasdaq.com/articles/the-top-10-constituents-of-the-nasdaq-100-index).
 
 It is worth noting that Alphabet has 2 stocks (GOOG and GOOGL) in the list, but the company only holds 1 earnings call transcript every quarter. Therefore, we selected the class C share as our target stock, leaving the list with 9 stocks. We retrieved the earnings call transcripts data from the FMP API and financial data from Yahoo Finance using Quantmod. The data range covers the period from 2013 to 2022, a total of 10 years. We use the data from 2013 to 2020 (8 years) for training the model and the data from 2021 to 2022 (2 years) for testing.
 
