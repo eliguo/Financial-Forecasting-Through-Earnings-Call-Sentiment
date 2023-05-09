@@ -1,0 +1,474 @@
+---
+title: "Final Project"
+author: "Eli Guo, Jijin Xu, TingXuan Tang, Xinyi Zhang"
+date: "2023-04-23"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    toc_depth: 3
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T, tidy = T, message = F, warning = F)
+```
+
+# Statement of the Research Problem
+
+The objective of our project is to develop a regression model with ARIMA errors that predicts the stock prices of the top 9 constituent NASDAQ stocks ("AAPL", "MSFT", "GOOG", "AMZN", "TSLA", "META", "NVDA", "PEP", "COST") by analyzing the earnings call transcripts of these companies. We selected these stocks based on the article by NASDAQ (<https://www.nasdaq.com/articles/the-top-10-constituents-of-the-nasdaq-100-index>).
+
+It is worth noting that Alphabet has 2 stocks (GOOG and GOOGL) in the list, but the company only holds 1 earnings call transcript every quarter. Therefore, we selected the class C share as our target stock, leaving the list with 9 stocks. We retrieved the earnings call transcripts data from the FMP API and financial data from Yahoo Finance using Quantmod. The data range covers the period from 2013 to 2022, a total of 10 years. We use the data from 2013 to 2020 (8 years) for training the model and the data from 2021 to 2022 (2 years) for testing.
+
+We performed sentiment analysis and latent semantic analysis (LSA) to extract statistics and dimensions as predictors for our ARIMA model. As the output data is highly dimensional, we used factor analysis to reduce the dimensionality. Finally, we were able to pass the predictors gained from text mining as xreg in the ARIMA function to construct a regression model with ARIMA errors. However, while the model fitted better for the training data, it actually overfits and performs worse on the testing data.
+
+Moreover, we successfully implemented a Bidirectional Encoder Representations from Transformers (BERT) model to extract 738 features from the text data. However, considering that our data is already highly dimensional, we did not input the features into our ARIMA model. Instead, we performed a simple linear regression model for the stock prices based on the extracted features.
+
+# Earnings Call Data
+
+```{r}
+#install.packages('fmpcloudr')
+library(fmpcloudr)
+
+# Set FMP Cloud API token and parameters
+fmpc_set_token('104c65e14abb7ee3eb0a01a146a0d538', timeBtwnReq = 0.2, noBulkWarn = TRUE)
+# Retrieve a list of all available stock symbols
+symbols_available = fmpc_symbols_available()
+# Display the first few rows of the symbol list
+head(symbols_available)
+```
+
+```{r}
+# Create a list of top 9 constituent NASDAQ stock symbols
+symbol = c("AAPL", "MSFT", "GOOG", "AMZN", "TSLA", "META", "NVDA", "PEP", "COST")
+# Check whether symbols in the list are available
+symbol %in% symbols_available$symbol
+```
+
+```{r}
+# Function to get transcripts from FMP Cloud API
+get_transcripts = function(symbols, quarters, years){
+        combinations = expand.grid(symbols, quarters, years)
+        transcripts = apply(combinations, 1, function(combination){
+                fmpc_earning_call_transcript(combination[1], combination[2], combination[3])
+        })
+        transcripts = do.call(rbind, transcripts)
+        return(transcripts)
+}
+```
+
+```{r}
+# Fetch earnigns call transcripts data
+transcripts = get_transcripts(symbols = symbol, quarter = 1:4, year = 2013:2022)
+str(transcripts)
+```
+
+```{r}
+library(stringr)
+
+# Explore the size of each transcript
+mean(nchar(transcripts$content)) # characters
+mean(str_count(transcripts$content, pattern = '\\S+')) # words
+mean(str_count(transcripts$content, pattern = '[A-Za-z,;\'"\\\\s]+[^.!?]*[.?!]')) #sentences
+```
+
+```{r}
+library(tidyr); library(dplyr)
+transcripts = transcripts %>% 
+        # Fill in missing values for symbol, quarter, and year
+        complete(symbol, quarter, year) %>%
+        # Convert date column to date object
+        mutate(date = as.Date(date),
+               # Remove newline characters from content
+               content = gsub("\n", "", content),
+               # Remove non-alphanumeric characters from content
+               content = gsub("[^[:alnum:][:space:]]", "", content))
+```
+
+```{r}
+transcripts[which(is.na(transcripts$content)),] #missing values
+```
+
+```{r}
+write.csv(transcripts, "transcripts.csv")
+```
+
+# Financial Data
+
+```{r}
+library(quantmod)
+start_date = min(transcripts$date, na.rm = TRUE)
+end_date = max(transcripts$date, na.rm = TRUE) + 1
+
+# Download the data for multiple companies using lapply() function
+stock_prices = lapply(symbol, function(x) {
+        stocks = getSymbols.yahoo(x, from = start_date, to = end_date, periodicity = "daily", auto.assign = FALSE)
+        # Extract the adjusted stock price data from the daily data frames
+        adj_close = data.frame(date = index(stocks), Adjusted = as.numeric(stocks[, paste0(x, ".Adjusted")]))
+        # Add the company name column to the data frame
+        adj_close$symbol = x
+        return(adj_close)
+})
+
+stock_prices = do.call(rbind, stock_prices)
+head(stock_prices)
+```
+
+```{r}
+write.csv(stock_prices, "stock_prices.csv")
+```
+
+```{r}
+# Combine stock prices and transcripts data
+data = stock_prices %>% 
+        inner_join(transcripts, by = c("symbol", "date")) %>% 
+        # Add 'id' column as document id
+        mutate(id = row_number()) %>% 
+        select(id, year, quarter, date, symbol, content, Adjusted)
+```
+
+```{r}
+write.csv(data, "data_combined.csv")
+```
+
+# Sentiment Analysis
+
+```{r}
+library(tidytext)
+
+# Extract the percentage of positive words for each document using 'bing' lexicon
+pct_positive_words = data %>%
+        unnest_tokens(input = content, output = word) %>%
+        inner_join(get_sentiments('bing')) %>%
+        group_by(id) %>%
+        summarize(pct_positive_words = mean(sentiment == 'positive')) %>%
+        ungroup()
+head(pct_positive_words)
+```
+
+```{r}
+# Extract the sentiment score for each document using 'afinn' lexicon
+sentiment_score = data %>%
+        select(id, content) %>%
+        group_by(id) %>%
+        unnest_tokens(output = word, input = content) %>%
+        inner_join(get_sentiments('afinn')) %>%
+        summarize(sentiment_score = mean(value)) %>%
+        ungroup()
+head(sentiment_score)
+```
+
+```{r}
+# Combine the percentage of positive words and sentiment score as sentiment predictors
+sentiment_pred = merge(pct_positive_words, sentiment_score)
+head(sentiment_pred)
+```
+
+```{r}
+library(wordcloud)
+
+# Prepare the data for the word cloud
+wordcloudData = 
+        data %>%
+        group_by(id) %>%
+        unnest_tokens(output = word, input = content) %>%
+        ungroup() %>%
+        select(id, word) %>%
+        anti_join(stop_words) %>%
+        group_by(word) %>%
+        summarize(freq = n()) %>%
+        arrange(desc(freq)) %>%
+        ungroup() %>%
+        data.frame()
+
+# Create the word cloud
+set.seed(617)
+wordcloud(words = wordcloudData$word, wordcloudData$freq, scale=c(2,0.5), max.words = 100, colors = brewer.pal(9, "Spectral"))
+```
+
+# LSA
+
+```{r}
+library(tm)
+
+# Create a corpus
+corpus = Corpus(VectorSource(data$content))
+```
+
+```{r}
+# Use tm_map() for data cleaning
+corpus = corpus %>%
+        # transform text to lower case
+        tm_map(content_transformer(tolower)) %>%
+        # remove any unwanted characters or symbols
+        tm_map(content_transformer(function(x) iconv(x, to = 'UTF-8-MAC', sub = ''))) %>%
+        # remove punctuation
+        tm_map(removePunctuation) %>%
+        # remove stopwords
+        tm_map(removeWords, stopwords('english')) %>%
+        tm_map(content_transformer(function(x) gsub('[0-9]', '', x))) %>%
+        # remove urls
+        tm_map(content_transformer(function(x) gsub(pattern = 'http[[:alnum:][:punct:]]*', replacement = ' ', x = x))) %>%
+        # remove whitespace
+        tm_map(stripWhitespace) %>%
+        # stem document
+        tm_map(stemDocument)
+```
+
+```{r}
+corpus[[1]]$content
+```
+
+```{r}
+# Extract cleaned transcripts
+transformed_text = sapply(corpus, as.character)
+data$transformed_text = transformed_text
+str(data)
+```
+
+```{r}
+# Create a dictionary for stem completion
+dict = findFreqTerms(DocumentTermMatrix(Corpus(VectorSource(data$content))),
+                     lowfreq = 0)
+dict_corpus = Corpus(VectorSource(dict))
+```
+
+```{r}
+# Create a DocumentTermMatrix
+dtm = DocumentTermMatrix(corpus)
+inspect(dtm[1, ])
+```
+
+```{r}
+# Remove sparse terms
+xdtm = removeSparseTerms(dtm, sparse = 0.95)
+
+# Complete stems
+xdtm = as.data.frame(as.matrix(xdtm))
+colnames(xdtm) = stemCompletion(x = colnames(xdtm),
+                                dictionary = dict_corpus,
+                                type = 'prevalent')
+colnames(xdtm) = make.names(colnames(xdtm))
+```
+
+```{r}
+# Browse tokens
+sort(colSums(xdtm), decreasing=T)[1:20]
+```
+
+```{r}
+library(lsa)
+# Apply Latent Semantic Analysis to the DocumentTermMatrix
+clusters = lsa(xdtm)
+# Get the top keywords from each cluster and convert to a data frame
+lsa_pred = as.data.frame(clusters$tk)
+dim(lsa_pred)
+```
+
+```{r}
+# Reset column names
+colnames(lsa_pred) = paste0("dim",1:63)
+lsa_pred = lsa_pred %>% 
+        # Add 'id' column
+        mutate(id = row_number()) %>% 
+        select(id, everything())
+head(lsa_pred)
+```
+
+# BERT
+
+```{r}
+# Import necessary libraries
+library(tidyverse)     # For data manipulation
+library(tensorflow)    # For deep learning
+library(reticulate)    # For Python integration
+library(LiblineaR)     # For linear models
+library(tidymodels)    # For modeling
+
+# Set up virtual environment for reticulate
+use_virtualenv("~/myenv")
+
+# Install 'transformers' package using pip
+py_install('transformers', pip = T)
+
+# Import necessary Python packages using reticulate
+transformer = reticulate::import('transformers')  # For NLP models
+tf = reticulate::import('tensorflow')             # For deep learning models
+builtins = import_builtins()                      # For built-in Python functions
+
+# Create tokenizer object
+tokenizer = transformer$AutoTokenizer$from_pretrained('bert-base-uncased')
+
+# Get text data from 'data' data frame
+texts = data %>% select(transformed_text) %>% pull()
+
+# Encode texts using tokenizer object
+texts_encodings = tokenizer(texts, truncation = TRUE, padding = TRUE, max_length = 250L)
+
+# Create BERT model object
+BERT = transformer$TFBertModel$from_pretrained("bert-base-uncased")
+
+# Initialize features matrix
+features = matrix(NA, nrow = length(texts), ncol = 768) 
+
+# Iterate through texts, encode with tokenizer and reshape with BERT model
+for (i in 1:length(texts)){
+        encodings_i = tokenizer(texts[i], truncation = TRUE, padding = TRUE, max_length = 250L, return_tensors = 'tf')
+        features[i, ] = py_to_r(array_reshape(BERT(encodings_i)[[1]][[0]][[0]],c(1, 768)))
+}
+
+# Set column names of features matrix
+colnames(features) = str_c("V", rep(1:768))
+
+features = as.data.frame(features)
+
+# Display first six rows of features data frame
+head(features)
+```
+
+```{r}
+data1 = cbind(data$Adjusted, features)
+
+names(data1)[names(data1) == "data$Adjusted"] <- "Adjusted"
+
+set.seed(617)
+split = caret::createDataPartition(data1$Adjusted, p = 0.7, list = FALSE)
+train_set = data1[split,]
+test_set = data1[-split,]
+
+reg = lm(Adjusted~., train_set)
+summary(reg)
+
+pred_train = predict(reg)
+rmse_train = sqrt(mean((train_set$Adjusted - pred_train)^2)); rmse_train
+
+pred_test = predict(reg, newdata=test_set)
+rmse_test = sqrt(mean((test_set$Adjusted - pred_test)^2)); rmse_test
+```
+
+# Regression with Arima errors
+
+```{r}
+# Add predictors from sentiment analysis and lsa to data
+data = data %>% 
+        inner_join(sentiment_pred, by = 'id') %>% 
+        inner_join(lsa_pred, by = 'id') %>% 
+        select(-c(content, transformed_text))
+head(data)
+```
+
+```{r}
+# Check missing values
+sum(is.na(data))
+```
+
+```{r}
+# Calculate the mean of the predictors and stock prices for each quarter
+data = data %>% 
+        group_by(year, quarter) %>% 
+        select(-c(id, date, symbol)) %>% 
+        summarise_all(mean) %>% 
+        arrange(year, quarter)
+# Scale predictors
+data[,4:68] = scale(data[,4:68])
+data    
+```
+
+# Factor Analysis
+
+```{r}
+factors = data[,4:68]
+library(psych)
+# Examine suitability for factor analysis
+KMO(r = cor(factors))
+```
+
+```{r}
+# Calculate eigen values
+data.frame(factor = 1:ncol(factors), eigen = eigen(cor(factors))$values)
+```
+
+```{r}
+# Examine total variance explained
+result = fa(r = factors, nfactors = 19, fm = 'pa', rotate = 'varimax')
+result$Vaccounted
+```
+
+```{r}
+# Extract weighted average of variables as factors
+pred = as.data.frame(result$scores)
+pred
+```
+
+```{r}
+# Combine extracted factors with data
+data = data %>% 
+        select(year, quarter, Adjusted) %>% 
+        cbind(pred)
+data
+```
+
+# Arima
+
+```{r}
+# Split data into train and test
+train = data %>% filter(year < 2021)
+test = data %>% filter(year >= 2021)
+```
+
+```{r}
+# Create a time series object for stock prices in the train data
+train_y = ts(data = train$Adjusted, start = 2013, frequency = 4)
+train_y
+```
+
+```{r}
+# Create a time series object for stock prices in the test data
+test_y = ts(data = test$Adjusted, start = 2021, frequency = 4)
+test_y
+```
+
+```{r}
+library(forecast)
+train_y %>% autoplot() #errors when kniting
+```
+
+```{r}
+train_y %>% 
+        BoxCox(lambda = BoxCox.lambda(train_y)) %>%
+        diff() %>%
+        #autoplot() %>% 
+        #Box.test(type = 'Ljung-Box') %>% 
+        checkresiduals() #errors when kniting
+```
+
+```{r}
+# Create a time series object for predictors in the train data
+train_x = ts(data = as.matrix(scale(train[,4:22])), start = 2013, frequency = 4)
+# Create a time series object for predictors in the test data
+test_x = ts(data = as.matrix(scale(test[,4:22])), start = 2021, frequency = 4)
+```
+
+```{r}
+library(forecast)
+# Construct regression model with ARIMA errors
+model = Arima(y = train_y, xreg = train_x, order = c(1,1,0), lambda = BoxCox.lambda(train_y))
+model
+```
+
+```{r}
+y = ts(data = data$Adjusted, start = 2013, frequency = 4)
+y
+```
+
+```{r}
+model_forecast = forecast(model, h = 8, xreg = test_x)
+accuracy(model_forecast, y)
+```
+
+```{r}
+# Implement a normal arima model for comparison
+model1 = Arima(y = train_y, order = c(1,1,0), lambda = BoxCox.lambda(train_y))
+model_forecast1 = forecast(model1, h = 8)
+accuracy(model_forecast1, y)
+```
