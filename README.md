@@ -1,4 +1,4 @@
-# Financial-Forecasting-through-Earnings-Call-Sentiment
+# Financial-Forecasting-Through-Earnings-Call-Sentiment
 APAN 5205 Applied Analytics Frameworks and Methods II - Final Project  
 Advised by: Prof. Vishal Lala
 
